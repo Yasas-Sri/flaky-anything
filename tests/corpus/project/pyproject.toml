@@ -1,0 +1,4 @@
+# Intentionally flaky evaluation corpus for flaky-anything. See docs/CORPUS.md.
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

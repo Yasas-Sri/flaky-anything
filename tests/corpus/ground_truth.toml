@@ -1,0 +1,85 @@
+# Ground truth for the flaky corpus (tests/corpus/project). See docs/CORPUS.md.
+#
+# Node ids are relative to tests/corpus/project.
+# necessary_knobs uses TrialConfig knob names: order, hash_seed, random_seed, clock, tz.
+# [cases.X.trigger] holds concrete trigger values using TrialConfig field names. Everything a
+# trigger doesn't set stays at baseline (collection order, PYTHONHASHSEED=0, random_seed=0,
+# tz=UTC, clock 2027-06-16T10:00:00Z, a Wednesday mid-month).
+# Seed cases have no pinned value: which seeds fail depends on the Python version (hash_seed,
+# D9) and on the per-test seed derivation (random_seed). Tests find one on the running setup.
+
+[cases.O1]
+nodeid = "tests/test_order.py::test_lookup_empty_cache"
+category = "order:victim"
+necessary_knobs = ["order"]
+polluter = "tests/test_order.py::test_warm_cache"
+trigger.order = ["tests/test_order.py::test_warm_cache", "tests/test_order.py::test_lookup_empty_cache"]
+
+[cases.O2]
+nodeid = "tests/test_order.py::test_reads_configured_value"
+category = "order:brittle"
+necessary_knobs = ["order"]
+state_setter = "tests/test_order.py::test_configure"
+trigger.order = ["tests/test_order.py::test_reads_configured_value"]
+
+[cases.O3]
+nodeid = "tests/test_order.py::test_default_currency"
+category = "order:victim"
+necessary_knobs = ["order"]
+polluter = "tests/test_order.py::test_switch_to_eur"
+trigger.order = ["tests/test_order.py::test_switch_to_eur", "tests/test_order.py::test_default_currency"]
+
+[cases.T1]
+nodeid = "tests/test_time.py::test_next_month_invoice"
+category = "time:month_end"
+necessary_knobs = ["clock"]
+production_bug = true   # correct fix edits corpuslib/billing.py
+trigger.clock = 2027-01-31T23:59:59.5Z
+
+[cases.T2]
+nodeid = "tests/test_time.py::test_report_is_for_today"
+category = "time:midnight"
+necessary_knobs = ["clock"]
+trigger.clock = 2027-06-15T23:59:59.5Z
+
+[cases.T3]
+nodeid = "tests/test_time.py::test_day_has_24_hours"
+category = "combined"
+necessary_knobs = ["clock", "tz"]
+trigger.clock = 2027-03-14T16:00:00Z   # noon on the US spring-forward day
+trigger.tz = "America/New_York"
+
+[cases.T4]
+nodeid = "tests/test_time.py::test_business_hours_utc_assumption"
+category = "tz"
+necessary_knobs = ["tz"]
+trigger.tz = "Pacific/Kiritimati"
+
+[cases.S1]
+nodeid = "tests/test_seeds.py::test_sample_has_no_duplicates_bug"
+category = "seed:random"
+necessary_knobs = ["random_seed"]
+
+[cases.S2]
+nodeid = "tests/test_seeds.py::test_tags_render_in_order"
+category = "seed:hash"
+necessary_knobs = ["hash_seed"]
+
+[cases.U1]
+nodeid = "tests/test_seeds.py::test_uses_os_urandom"
+category = "uncontrolled"
+necessary_knobs = []
+
+[stable]
+# Must never be reported as flaky. Includes the polluters/state-setter: they always pass.
+nodeids = [
+  "tests/test_stable.py::test_c1",
+  "tests/test_stable.py::test_c2",
+  "tests/test_stable.py::test_c3",
+  "tests/test_stable.py::test_c4",
+  "tests/test_stable.py::test_c5",
+  "tests/test_stable.py::test_c6",
+  "tests/test_order.py::test_warm_cache",
+  "tests/test_order.py::test_configure",
+  "tests/test_order.py::test_switch_to_eur",
+]
