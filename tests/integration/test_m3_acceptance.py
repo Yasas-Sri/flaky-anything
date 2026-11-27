@@ -4,6 +4,7 @@ Cases are added here as their knobs land; each runs once under baseline (must pa
 under its trigger (must fail), as real trials of a copy of the corpus.
 """
 
+import random
 import shutil
 import sys
 from datetime import datetime, timezone
@@ -13,7 +14,9 @@ from typing import Any
 import pytest
 
 from flaky_anything.config import ClockSpec, TrialConfig
+from flaky_anything.knobs.base import Knob
 from flaky_anything.knobs.order import explicit
+from flaky_anything.knobs.seeds import HashSeedKnob, RandomSeedKnob
 from flaky_anything.runner import run_trial
 
 if sys.version_info >= (3, 11):
@@ -30,6 +33,8 @@ BASELINE = dict(
     clock=ClockSpec(instant=datetime(2027, 6, 16, 10, tzinfo=timezone.utc)),
 )
 ORDER_CASES = [k for k, v in GT.items() if v["necessary_knobs"] == ["order"]]
+SEED_KNOBS: dict[str, Knob[int]] = {k.name: k for k in (HashSeedKnob(), RandomSeedKnob())}
+SEED_CASES = [k for k, v in GT.items() if v["necessary_knobs"] in ([n] for n in SEED_KNOBS)]
 
 
 @pytest.fixture(scope="module")
@@ -54,3 +59,18 @@ def test_order_trigger_fails_via_knob(case: str, project: Path) -> None:
     passing = [helper, victim] if "state_setter" in GT[case] else [victim, helper]
     assert outcome(explicit(base, passing), project, victim) == "passed"
     assert outcome(explicit(base, GT[case]["trigger"]["order"]), project, victim) == "failed"
+
+
+@pytest.mark.parametrize("case", SEED_CASES)
+def test_seed_trigger_fails_via_knob(case: str, project: Path) -> None:
+    # No pinned trigger value (seed outcomes depend on the Python version, D9): the trigger is
+    # "some value the knob samples". Deterministic: each outcome is fixed by its seed value.
+    victim = GT[case]["nodeid"]
+    knob = SEED_KNOBS[GT[case]["necessary_knobs"][0]]
+    base = TrialConfig(nodeids=[victim], **BASELINE)
+    assert outcome(base, project, victim) == "passed"
+    for i in range(20):
+        value = knob.sample(random.Random(i))
+        if outcome(knob.apply(base, value), project, victim) == "failed":
+            return
+    pytest.fail(f"no sampled {knob.name} in 20 made {case} fail")
