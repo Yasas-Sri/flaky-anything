@@ -15,8 +15,10 @@ import pytest
 
 from flaky_anything.config import ClockSpec, TrialConfig
 from flaky_anything.knobs.base import Knob
+from flaky_anything.knobs.clock import ClockKnob, edges
 from flaky_anything.knobs.order import explicit
 from flaky_anything.knobs.seeds import HashSeedKnob, RandomSeedKnob
+from flaky_anything.knobs.tz import ZONES, TzKnob
 from flaky_anything.runner import run_trial
 
 if sys.version_info >= (3, 11):
@@ -35,6 +37,8 @@ BASELINE = dict(
 ORDER_CASES = [k for k, v in GT.items() if v["necessary_knobs"] == ["order"]]
 SEED_KNOBS: dict[str, Knob[int]] = {k.name: k for k in (HashSeedKnob(), RandomSeedKnob())}
 SEED_CASES = [k for k, v in GT.items() if v["necessary_knobs"] in ([n] for n in SEED_KNOBS)]
+CLOCK_CASES = [k for k, v in GT.items() if v["necessary_knobs"] == ["clock"]]
+TZ_CASES = [k for k, v in GT.items() if "tz" in v["necessary_knobs"]]  # T4 alone, T3 with clock
 
 
 @pytest.fixture(scope="module")
@@ -74,3 +78,32 @@ def test_seed_trigger_fails_via_knob(case: str, project: Path) -> None:
         if outcome(knob.apply(base, value), project, victim) == "failed":
             return
     pytest.fail(f"no sampled {knob.name} in 20 made {case} fail")
+
+
+@pytest.mark.parametrize("case", CLOCK_CASES)
+def test_clock_trigger_fails_via_knob(case: str, project: Path) -> None:
+    victim, trigger = GT[case]["nodeid"], GT[case]["trigger"]["clock"]
+    assert trigger in [t for group in edges("UTC").values() for t in group]  # the knob samples it
+    knob = ClockKnob()
+    base = TrialConfig(nodeids=[victim], **BASELINE)
+    assert outcome(knob.apply(base, knob.baseline()), project, victim) == "passed"
+    assert outcome(knob.apply(base, ClockSpec(instant=trigger)), project, victim) == "failed"
+
+
+@pytest.mark.parametrize("case", TZ_CASES)
+def test_tz_trigger_fails_via_knobs_and_needs_each_one(case: str, project: Path) -> None:
+    gt = GT[case]
+    victim, tz = gt["nodeid"], gt["trigger"]["tz"]
+    assert tz in ZONES
+    base = TrialConfig(nodeids=[victim], **BASELINE)
+    tz_knob, clock_knob = TzKnob(), ClockKnob(ZONES)
+    knobs: dict[str, Any] = {"tz": (tz_knob, tz)}
+    if "clock" in gt["necessary_knobs"]:
+        knobs["clock"] = (clock_knob, ClockSpec(instant=gt["trigger"]["clock"]))
+    triggered = base
+    for knob, value in knobs.values():
+        triggered = knob.apply(triggered, value)
+    assert outcome(base, project, victim) == "passed"
+    assert outcome(triggered, project, victim) == "failed"
+    for name, (knob, _) in knobs.items():  # resetting any one necessary knob makes it pass
+        assert outcome(knob.apply(triggered, knob.baseline()), project, victim) == "passed", name
