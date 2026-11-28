@@ -15,7 +15,7 @@ class HashSeedKnob:
     def baseline(self) -> int:
         return 0
 
-    def sample(self, rng: random.Random) -> int:
+    def sample(self, rng: random.Random, config: TrialConfig) -> int:
         return rng.randrange(SEED_SPACE)
 
     def apply(self, config: TrialConfig, value: int) -> TrialConfig:
@@ -34,7 +34,7 @@ class RandomSeedKnob:
     def baseline(self) -> int:
         return 0
 
-    def sample(self, rng: random.Random) -> int:
+    def sample(self, rng: random.Random, config: TrialConfig) -> int:
         return rng.randrange(SEED_SPACE)
 
     def apply(self, config: TrialConfig, value: int) -> TrialConfig:

@@ -12,8 +12,8 @@ CFG = TrialConfig(nodeids=["t.py::a"])
 @pytest.mark.parametrize("knob", [HashSeedKnob(), RandomSeedKnob()], ids=lambda k: k.name)
 def test_seed_knob_contract(knob: Knob[int]) -> None:
     assert isinstance(knob, Knob)
-    assert knob.sample(random.Random(3)) == knob.sample(random.Random(3))
-    samples = {knob.sample(random.Random(s)) for s in range(20)}
+    assert knob.sample(random.Random(3), CFG) == knob.sample(random.Random(3), CFG)
+    samples = {knob.sample(random.Random(s), CFG) for s in range(20)}
     assert len(samples) == 20
     for value in (knob.baseline(), *samples):
         cfg = knob.apply(CFG, value)  # re-validated: hash_seed must fit PYTHONHASHSEED

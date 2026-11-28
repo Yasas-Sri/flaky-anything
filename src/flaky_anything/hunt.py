@@ -5,13 +5,14 @@ All randomness comes from one `random.Random(hunt_seed)`, so a seed replays the 
 
 import random
 import sys
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel
 
 from flaky_anything.config import TrialConfig
+from flaky_anything.hints import Hints
 from flaky_anything.knobs.base import Knob
 from flaky_anything.knobs.registry import baseline_config
 from flaky_anything.runner import TrialResult, run_trials
@@ -23,10 +24,11 @@ FAILING = ("failed", "timeout", "error")  # a hang or crash of one test is a fai
 
 
 def sample_config(base: TrialConfig, knobs: Iterable[Knob[Any]], rng: random.Random) -> TrialConfig:
-    """`base` (all knobs at baseline) with every enabled knob sampled, in registry order."""
+    """`base` (all knobs at baseline) with every enabled knob sampled, in registry order; each
+    knob sees the config so far (the clock samples edges in the already-sampled tz)."""
     cfg = base
     for knob in knobs:
-        cfg = knob.apply(cfg, knob.sample(rng))
+        cfg = knob.apply(cfg, knob.sample(rng, cfg))
     return cfg
 
 
@@ -81,3 +83,74 @@ def phase_a(
     base = baseline_config(nodeids)
     configs = [sample_config(base, knobs, rng) for _ in range(runs)]  # drawn before running
     return run_and_store(configs, project_root, store, jobs=jobs, python=python)
+
+
+PHASE_B_ROUNDS = 20  # per-test budget: rounds a target takes part in before it's called stable
+GROUP_TARGETS = 4
+GROUP_FILLERS = 2  # random other tests per group, so targets meet varied neighbours/polluters
+
+
+def phase_b_targets(
+    nodeids: Sequence[str], seen: Mapping[str, Tally], hints: Mapping[str, Hints]
+) -> list[str]:
+    """Unconfirmed tests worth targeting: failed in Phase A first, then by hint score.
+    A test with neither a failure nor a hint is not targeted."""
+    empty, no_hints = Tally(), Hints()
+    candidates = [
+        n
+        for n in nodeids
+        if not seen.get(n, empty).confirmed_flaky
+        and (seen.get(n, empty).failed or hints.get(n, no_hints).score > 0)
+    ]
+    return sorted(
+        candidates,
+        key=lambda n: (not seen.get(n, empty).failed, -hints.get(n, no_hints).score),
+    )
+
+
+def phase_b_round(
+    targets: Sequence[str],
+    others: Sequence[str],
+    knobs: Sequence[Knob[Any]],
+    rng: random.Random,
+) -> list[tuple[list[str], TrialConfig]]:
+    """One round: every target in exactly one group, each group under its own sampled config.
+    Drawn whether or not earlier trials confirmed anything, so outcomes outside our knobs
+    (e.g. os.urandom) can't change which configs the rest of a seeded hunt gets (D28)."""
+    shuffled = list(targets)
+    rng.shuffle(shuffled)
+    groups = []
+    for i in range(0, len(shuffled), GROUP_TARGETS):
+        members = shuffled[i : i + GROUP_TARGETS]
+        fillers = rng.sample(list(others), min(GROUP_FILLERS, len(others)))
+        groups.append((members, sample_config(baseline_config(members + fillers), knobs, rng)))
+    return groups
+
+
+def phase_b(
+    nodeids: Sequence[str],
+    targets: Sequence[str],
+    seen: dict[str, Tally],
+    knobs: Sequence[Knob[Any]],
+    rng: random.Random,
+    project_root: Path,
+    store: Store,
+    rounds: int = PHASE_B_ROUNDS,
+    jobs: int = 1,
+    python: str = sys.executable,
+) -> list[TrialResult]:
+    """Run targets in small sampled groups until each is confirmed flaky or `rounds` are spent.
+    Updates `seen` in place."""
+    target_set = set(targets)
+    others = [n for n in nodeids if n not in target_set]
+    results: list[TrialResult] = []
+    for _ in range(rounds):
+        groups = phase_b_round(targets, others, knobs, rng)
+        done = {t for t in targets if seen.get(t, Tally()).confirmed_flaky}
+        todo = [cfg for members, cfg in groups if not set(members) <= done]
+        if not todo:
+            break
+        batch = run_and_store(todo, project_root, store, jobs=jobs, python=python)
+        tally(batch, into=seen)
+        results += batch
+    return results

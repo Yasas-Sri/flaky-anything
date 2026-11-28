@@ -28,7 +28,7 @@ class TzKnob:
     def baseline(self) -> str:
         return "UTC"
 
-    def sample(self, rng: random.Random) -> str:
+    def sample(self, rng: random.Random, config: TrialConfig) -> str:
         return rng.choice(self.zones)
 
     def apply(self, config: TrialConfig, value: str) -> TrialConfig:

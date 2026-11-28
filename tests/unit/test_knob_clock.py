@@ -64,24 +64,40 @@ def test_dst_transitions_are_exact() -> None:
     assert edge_class(utc(2027, 3, 14, 16), "America/New_York") == "ordinary"  # T3 noon
 
 
+def in_tz(tz: str | None) -> TrialConfig:
+    return CFG.model_copy(update={"tz": tz})
+
+
 def test_sampling_is_deterministic_and_mixes_edges_with_random() -> None:
-    assert knob.sample(random.Random(5)) == knob.sample(random.Random(5))
-    samples = [knob.sample(random.Random(s)) for s in range(300)]
+    ny = in_tz("America/New_York")
+    assert knob.sample(random.Random(5), ny) == knob.sample(random.Random(5), ny)
+    samples = [knob.sample(random.Random(s), ny) for s in range(400)]
     assert all(v.tick and v.instant is not None for v in samples)
-    # local year boundaries of non-UTC zones fall up to a day outside the UTC range
-    lo, hi = utc(2027, 1, 1) - timedelta(days=1), utc(2029, 1, 1) + timedelta(days=1)
+    lo, hi = utc(2027, 1, 1), utc(2029, 1, 1) + timedelta(days=1)  # NY year ends are after UTC's
     assert all(lo <= v.instant < hi for v in samples if v.instant)
-    classes = Counter(
-        next((c for z in ZONES if (c := edge_class(v.instant, z)) != "ordinary"), "ordinary")
-        for v in samples
-        if v.instant
-    )
-    assert 0.5 < 1 - classes["ordinary"] / 300 < 0.7  # ~60% edges
+    classes = Counter(edge_class(v.instant, "America/New_York") for v in samples if v.instant)
+    assert 0.5 < 1 - classes["ordinary"] / 400 < 0.7  # ~60% edges
     assert {"month_end", "year_end", "leap_day", "midnight", "dst", "month_start"} <= set(classes)
+    # DST weighted 3 against 5 other classes: 3/8 of edges, ~0.225 of all samples
+    assert 0.17 < classes["dst"] / 400 < 0.28
+
+
+def test_edges_are_sampled_in_the_trials_zone() -> None:
+    for tz in ("Asia/Kolkata", "Australia/Lord_Howe"):
+        local = {t for group in edges(tz).values() for t in group}
+        samples = [knob.sample(random.Random(s), in_tz(tz)).instant for s in range(100)]
+        hits = [i for i in samples if i in local]
+        assert 50 <= len(hits) <= 70  # every edge sample is an edge *of that zone*
+    utc_edges = {t for group in edges("UTC").values() for t in group}
+    samples = [knob.sample(random.Random(s), in_tz(None)).instant for s in range(50)]
+    assert any(i in utc_edges for i in samples)  # tz=None (inherit) samples UTC edges
 
 
 def test_apply_round_trips_and_describe() -> None:
-    for value in (knob.baseline(), *(knob.sample(random.Random(s)) for s in range(20))):
+    for value in (
+        knob.baseline(),
+        *(knob.sample(random.Random(s), in_tz(ZONES[s % 3])) for s in range(20)),
+    ):
         cfg = knob.apply(CFG, value)
         assert TrialConfig.model_validate_json(cfg.canonical_json()).clock == value
     t1 = ClockSpec(instant=utc(2027, 1, 31, 23, 59, 59, 500_000))

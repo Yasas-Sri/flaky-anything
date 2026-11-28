@@ -17,6 +17,7 @@ from flaky_anything.knobs.base import replace
 YEARS = (2027, 2028)  # 2028 is a leap year
 BASELINE_INSTANT = datetime(2027, 6, 16, 10, tzinfo=timezone.utc)  # a Wednesday mid-month
 EDGE_SHARE = 0.6
+DST_WEIGHT = 3  # DST edges are scarce (some zones, 8 instants) and a classic real bug (D28)
 DAY_END = time(23, 59, 59, 500_000)  # a ticking clock crosses midnight half a second later
 ONE_S = timedelta(seconds=1)
 _START = datetime(YEARS[0], 1, 1, tzinfo=timezone.utc)
@@ -90,16 +91,19 @@ class ClockKnob:
     name = "clock"
 
     def __init__(self, zones: Sequence[str] = ("UTC",)) -> None:
-        self.zones = tuple(zones)  # edges are generated in these zones (the tz knob's values)
+        self.zones = tuple(zones)  # zones `describe` labels edges in (the tz knob's values)
 
     def baseline(self) -> ClockSpec:
         return ClockSpec(instant=BASELINE_INSTANT)
 
-    def sample(self, rng: random.Random) -> ClockSpec:
-        tz = rng.choice(self.zones)
+    def sample(self, rng: random.Random, config: TrialConfig) -> ClockSpec:
+        # An edge only matters in the zone the trial runs in; tz=None inherits ours: use UTC.
+        tz = config.tz or "UTC"
         if rng.random() < EDGE_SHARE:
             groups = edges(tz)
-            instant = rng.choice(groups[rng.choice(sorted(groups))])
+            classes = sorted(groups)
+            weights = [DST_WEIGHT if c == "dst" else 1 for c in classes]
+            instant = rng.choice(groups[rng.choices(classes, weights)[0]])
         else:
             span_us = (_STOP - _START) // timedelta(microseconds=1)
             instant = _START + timedelta(microseconds=rng.randrange(span_us))

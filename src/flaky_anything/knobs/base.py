@@ -18,8 +18,9 @@ class Knob(Protocol[V]):
         """The controlled, boring value; deterministic (ablation resets to it)."""
         ...
 
-    def sample(self, rng: random.Random) -> V:
-        """A perturbed value; all randomness from `rng` so hunts are reproducible (D19)."""
+    def sample(self, rng: random.Random, config: TrialConfig) -> V:
+        """A perturbed value; all randomness from `rng` so hunts are reproducible. `config` is
+        the trial being sampled, with knobs earlier in registry order already set (D28)."""
         ...
 
     def apply(self, config: TrialConfig, value: V) -> TrialConfig:

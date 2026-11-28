@@ -16,7 +16,7 @@ class OrderKnob:
     def baseline(self) -> OrderSpec:
         return OrderSpec()
 
-    def sample(self, rng: random.Random) -> OrderSpec:
+    def sample(self, rng: random.Random, config: TrialConfig) -> OrderSpec:
         return OrderSpec(mode="shuffle", seed=rng.randrange(2**32))
 
     def apply(self, config: TrialConfig, value: OrderSpec) -> TrialConfig:

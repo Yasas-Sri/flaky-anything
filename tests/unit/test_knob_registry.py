@@ -11,14 +11,15 @@ def names(spec: str) -> list[str]:
     return [k.name for k in select(spec)]
 
 
-def test_default_is_all_knobs_in_ablation_order() -> None:
-    assert names("order,seeds,clock,tz") == ["order", "hash_seed", "random_seed", "clock", "tz"]
+def test_default_is_all_knobs_in_sampling_order() -> None:
+    assert names("order,seeds,clock,tz") == ["order", "hash_seed", "random_seed", "tz", "clock"]
     assert select() == list(KNOBS)
 
 
 def test_selection_keeps_canonical_order_dedupes_and_expands_groups() -> None:
     assert names(" tz , order ") == ["order", "tz"]
     assert names("random_seed,seeds,clock,clock") == ["hash_seed", "random_seed", "clock"]
+    assert names("clock,tz") == ["tz", "clock"]  # tz first: clock edges follow the trial's zone
 
 
 @pytest.mark.parametrize("spec", ["order,network", "", " , "])

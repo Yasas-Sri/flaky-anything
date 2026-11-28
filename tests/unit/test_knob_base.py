@@ -13,7 +13,7 @@ class _TzKnob:
     def baseline(self) -> str:
         return "UTC"
 
-    def sample(self, rng: random.Random) -> str:
+    def sample(self, rng: random.Random, config: TrialConfig) -> str:
         return rng.choice(["UTC", "Asia/Colombo"])
 
     def apply(self, config: TrialConfig, value: str) -> TrialConfig:
@@ -29,7 +29,8 @@ class _TzKnob:
 def test_structural_knob_satisfies_protocol() -> None:
     knob: Knob[str] = _TzKnob()
     assert isinstance(knob, Knob)
-    cfg = knob.apply(TrialConfig(nodeids=["t.py::x"]), knob.sample(random.Random(0)))
+    base = TrialConfig(nodeids=["t.py::x"])
+    cfg = knob.apply(base, knob.sample(random.Random(0), base))
     assert cfg.tz in {"UTC", "Asia/Colombo"}
 
 

@@ -68,7 +68,7 @@ def test_seed_trigger_fails_via_knob(case: str, project: Path) -> None:
     base = baseline_config([victim])
     assert outcome(base, project, victim) == "passed"
     for i in range(20):
-        value = knob.sample(random.Random(i))
+        value = knob.sample(random.Random(i), base)
         if outcome(knob.apply(base, value), project, victim) == "failed":
             return
     pytest.fail(f"no sampled {knob.name} in 20 made {case} fail")

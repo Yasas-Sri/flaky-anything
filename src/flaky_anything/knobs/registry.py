@@ -1,4 +1,4 @@
-"""All knobs in ablation order, and `--knobs` selection."""
+"""All knobs in sampling order (tz before clock, D28), and `--knobs` selection."""
 
 from collections.abc import Sequence
 from typing import Any
@@ -11,13 +11,13 @@ from flaky_anything.knobs.order import OrderKnob
 from flaky_anything.knobs.seeds import HashSeedKnob, RandomSeedKnob
 from flaky_anything.knobs.tz import ZONES, TzKnob
 
-# Order matters: ablation resets knobs in this order (ARCHITECTURE.md §Diagnosis).
+# Order matters for sampling: tz before clock, so clock edges land in the trial's zone (D28).
 KNOBS: tuple[Knob[Any], ...] = (
     OrderKnob(),
     HashSeedKnob(),
     RandomSeedKnob(),
-    ClockKnob(ZONES),  # clock edges in every zone the tz knob can pick (D19)
     TzKnob(ZONES),
+    ClockKnob(ZONES),
 )
 GROUPS = {"seeds": ("hash_seed", "random_seed")}
 DEFAULT = "order,seeds,clock,tz"

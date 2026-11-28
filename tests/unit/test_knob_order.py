@@ -14,21 +14,21 @@ def test_is_a_knob() -> None:
 
 
 def test_sampling_is_deterministic_per_rng_seed_and_varies() -> None:
-    assert knob.sample(random.Random(7)) == knob.sample(random.Random(7))
-    samples = [knob.sample(random.Random(s)) for s in range(20)]
+    assert knob.sample(random.Random(7), CFG) == knob.sample(random.Random(7), CFG)
+    samples = [knob.sample(random.Random(s), CFG) for s in range(20)]
     assert all(v.mode == "shuffle" for v in samples)
     assert len({v.seed for v in samples}) == 20
 
 
 def test_apply_round_trips_through_stored_json() -> None:
-    for value in (knob.baseline(), knob.sample(random.Random(0)), OrderSpec(mode="explicit")):
+    for value in (knob.baseline(), knob.sample(random.Random(0), CFG), OrderSpec(mode="explicit")):
         cfg = knob.apply(CFG, value)
         assert TrialConfig.model_validate_json(cfg.canonical_json()).order == value
         assert cfg.nodeids == CFG.nodeids
 
 
 def test_baseline_is_collection_and_resets_a_shuffle() -> None:
-    shuffled = knob.apply(CFG, knob.sample(random.Random(0)))
+    shuffled = knob.apply(CFG, knob.sample(random.Random(0), CFG))
     assert knob.apply(shuffled, knob.baseline()) == CFG
 
 
