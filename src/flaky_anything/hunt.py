@@ -10,17 +10,19 @@ import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel
 
 from flaky_anything.config import TrialConfig
 from flaky_anything.errors import FlakyAnythingError
-from flaky_anything.hints import Hints
+from flaky_anything.hints import Hints, hints_for
 from flaky_anything.knobs.base import Knob
-from flaky_anything.knobs.registry import baseline_config
+from flaky_anything.knobs.registry import DEFAULT, baseline_config, select
 from flaky_anything.runner import TrialResult, run_trials
+from flaky_anything.selection import History, collect, junit_history
 from flaky_anything.signatures import signatures_for
+from flaky_anything.stats import wilson_interval
 from flaky_anything.store import Store
 
 PHASE_A_RUNS = 8
@@ -78,6 +80,7 @@ class Budget:
     seconds: float | None = None
     clock: Callable[[], float] = time.monotonic
     used: int = 0
+    hit: bool = False  # some wanted trial was refused: the hunt stopped early
     _start: float = field(init=False)
 
     def __post_init__(self) -> None:
@@ -85,11 +88,13 @@ class Budget:
 
     def allowance(self, wanted: int) -> int:
         """How many of `wanted` trials may start now (0 = budget spent)."""
+        allowed = wanted
         if self.seconds is not None and self.clock() - self._start >= self.seconds:
-            return 0
-        if self.max_trials is None:
-            return wanted
-        return max(0, min(wanted, self.max_trials - self.used))
+            allowed = 0
+        elif self.max_trials is not None:
+            allowed = max(0, min(wanted, self.max_trials - self.used))
+        self.hit |= allowed < wanted
+        return allowed
 
 
 def run_and_store(
@@ -142,20 +147,29 @@ GROUP_FILLERS = 2  # random other tests per group, so targets meet varied neighb
 
 
 def phase_b_targets(
-    nodeids: Sequence[str], seen: Mapping[str, Tally], hints: Mapping[str, Hints]
+    nodeids: Sequence[str],
+    seen: Mapping[str, Tally],
+    hints: Mapping[str, Hints],
+    history: Mapping[str, History] | None = None,
 ) -> list[str]:
-    """Unconfirmed tests worth targeting: failed in Phase A first, then by hint score.
-    A test with neither a failure nor a hint is not targeted."""
-    empty, no_hints = Tally(), Hints()
+    """Unconfirmed tests worth targeting: mixed outcomes in CI first, then failed in Phase A,
+    then by hint score. A test with no CI failure, no failure and no hint is not targeted."""
+    empty, no_hints, no_ci, ci = Tally(), Hints(), History(0, 0), history or {}
     candidates = [
         n
         for n in nodeids
         if not seen.get(n, empty).confirmed_flaky
-        and (seen.get(n, empty).failed or hints.get(n, no_hints).score > 0)
+        and (
+            seen.get(n, empty).failed or hints.get(n, no_hints).score > 0 or ci.get(n, no_ci).failed
+        )
     ]
     return sorted(
         candidates,
-        key=lambda n: (not seen.get(n, empty).failed, -hints.get(n, no_hints).score),
+        key=lambda n: (
+            not ci.get(n, no_ci).mixed,
+            not seen.get(n, empty).failed,
+            -hints.get(n, no_hints).score,
+        ),
     )
 
 
@@ -178,8 +192,8 @@ def phase_b_round(
     return groups
 
 
-def round_cap(tally: Tally, hints: Hints) -> int:
-    if tally.failed:
+def round_cap(tally: Tally, hints: Hints, ci: History | None = None) -> int:
+    if tally.failed or (ci is not None and ci.failed):  # failed here or in CI: suspicious
         return ROUNDS_MAX
     return min(ROUNDS_MAX, ROUNDS_PER_HINT * max(hints.score, 1))
 
@@ -195,6 +209,7 @@ def phase_b(
     store: Store,
     budget: Budget | None = None,
     max_rounds: int = ROUNDS_MAX,
+    history: Mapping[str, History] | None = None,
     jobs: int = 1,
     python: str = sys.executable,
 ) -> list[TrialResult]:
@@ -211,7 +226,8 @@ def phase_b(
             t
             for t in targets
             if not seen.get(t, Tally()).confirmed_flaky
-            and took_part[t] < round_cap(seen.get(t, Tally()), hints.get(t, Hints()))
+            and took_part[t]
+            < round_cap(seen.get(t, Tally()), hints.get(t, Hints()), (history or {}).get(t))
         }
         todo = [(members, cfg) for members, cfg in groups if open_ & set(members)]
         if not todo:
@@ -225,3 +241,108 @@ def phase_b(
         if len(batch) < len(todo):  # budget spent mid-round
             break
     return results
+
+
+class SignatureCount(BaseModel):
+    id: str
+    exc_type: str
+    count: int
+
+
+class TestFinding(BaseModel):
+    """One test that failed during the hunt. Rates are over the sampled configs it ran under
+    (targeted sampling, not a natural CI rate)."""
+
+    __test__ = False  # not a pytest test class
+
+    nodeid: str
+    verdict: Literal["flaky", "broken"]  # broken = failed in every trial it ran in
+    passed: int
+    failed: int
+    failure_rate: float
+    rate_low: float  # Wilson 95% (stats.wilson_interval)
+    rate_high: float
+    signatures: list[SignatureCount]
+    failing_config_ids: list[str]
+
+
+class HuntReport(BaseModel):
+    seed: int
+    knobs: list[str]
+    tests_selected: int
+    trials: int
+    budget_spent: bool  # stopped by --budget/--max-trials: unconfirmed tests may be flaky
+    flaky: list[TestFinding]
+    broken: list[TestFinding]
+
+
+def finding(nodeid: str, t: Tally, results: Mapping[str, TrialResult], store: Store) -> TestFinding:
+    sigs: dict[str, SignatureCount] = {}
+    for trial_id in t.failed:
+        sig = store.signature_of(trial_id, nodeid)
+        if sig is not None:
+            sigs.setdefault(sig.id, SignatureCount(id=sig.id, exc_type=sig.exc_type, count=0))
+            sigs[sig.id].count += 1
+    n = len(t.passed) + len(t.failed)
+    low, high = wilson_interval(len(t.failed), n)
+    return TestFinding(
+        nodeid=nodeid,
+        verdict="flaky" if t.confirmed_flaky else "broken",
+        passed=len(t.passed),
+        failed=len(t.failed),
+        failure_rate=len(t.failed) / n,
+        rate_low=low,
+        rate_high=high,
+        signatures=sorted(sigs.values(), key=lambda s: -s.count),
+        failing_config_ids=list(dict.fromkeys(results[i].config.config_id for i in t.failed)),
+    )
+
+
+def hunt(
+    project_root: Path,
+    paths: Sequence[str] = (),
+    junit: Sequence[Path] = (),
+    knobs: str = DEFAULT,
+    seed: int = 0,
+    budget: Budget | None = None,
+    jobs: int = 1,
+    python: str = sys.executable,
+) -> HuntReport:
+    """Select → hints → Phase A → Phase B → report. Everything random comes from `seed`."""
+    budget = budget or Budget()
+    enabled = select(knobs)
+    rng = random.Random(seed)
+    nodeids = collect(project_root, paths, python)
+    history = junit_history(junit, nodeids) if junit else {}
+    hints = hints_for(project_root, nodeids)
+    with Store(project_root) as store:
+        results = phase_a(
+            nodeids, enabled, rng, project_root, store, budget=budget, jobs=jobs, python=python
+        )
+        seen = tally(results)
+        targets = phase_b_targets(nodeids, seen, hints, history)
+        results += phase_b(
+            nodeids,
+            targets,
+            seen,
+            hints,
+            enabled,
+            rng,
+            project_root,
+            store,
+            budget,
+            history=history,
+            jobs=jobs,
+            python=python,
+        )
+        by_id = {r.trial_id: r for r in results}
+        found = [finding(n, seen[n], by_id, store) for n in nodeids if n in seen and seen[n].failed]
+    return HuntReport(
+        seed=seed,
+        knobs=[k.name for k in enabled],
+        tests_selected=len(nodeids),
+        trials=len(results),
+        budget_spent=budget.hit,
+        flaky=[f for f in found if f.verdict == "flaky"],
+        broken=[f for f in found if f.verdict == "broken"],
+    )
