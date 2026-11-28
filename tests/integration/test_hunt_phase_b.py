@@ -27,8 +27,9 @@ def test_phase_b_confirms_every_controlled_case_and_no_stable_test(tmp_path: Pat
     knobs, rng = select(), random.Random(0)
     with Store(root) as store:
         seen = tally(phase_a(nodeids, knobs, rng, root, store, jobs=4))
-        targets = phase_b_targets(nodeids, seen, hints_for(root, nodeids))
-        phase_b(nodeids, targets, seen, knobs, rng, root, store, rounds=10, jobs=4)
+        hints = hints_for(root, nodeids)
+        targets = phase_b_targets(nodeids, seen, hints)
+        phase_b(nodeids, targets, seen, hints, knobs, rng, root, store, max_rounds=10, jobs=4)
 
     confirmed = {n for n, t in seen.items() if t.confirmed_flaky}
     # U1 (os.urandom) is excluded: whether it fails in a given trial is not ours to decide.
