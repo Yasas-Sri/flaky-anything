@@ -84,3 +84,21 @@ def test_schema_version_mismatch_is_actionable_error(tmp_path: Path) -> None:
     with pytest.raises(FlakyAnythingError) as exc:
         Store(tmp_path)
     assert "delete" in (exc.value.hint or "")
+
+
+def test_config_by_id_and_failing_config_ids(tmp_path: Path) -> None:
+    first = make_result("t1")
+    other = first.model_copy(
+        update={"trial_id": "t2", "config": first.config.model_copy(update={"hash_seed": 9})}
+    )
+    again = first.model_copy(update={"trial_id": "t3"})  # same config as t1, failed again
+    with Store(tmp_path) as store:
+        for res in (first, other, again):
+            store.save_trial(res, {"t.py::test_b": SIG})
+        assert store.config(first.config.config_id) == first.config
+        ids = [first.config.config_id, other.config.config_id]
+        assert store.failing_config_ids("t.py::test_b") == ids  # oldest first, no repeats
+        assert store.failing_config_ids("t.py::test_a") == ids  # a timeout is a failure
+        assert store.failing_config_ids("t.py::nope") == []
+        with pytest.raises(FlakyAnythingError, match="no config"):
+            store.config("0" * 16)

@@ -154,6 +154,26 @@ class Store:
             ],
         )
 
+    def config(self, config_id: str) -> TrialConfig:
+        row = self.conn.execute(
+            "SELECT config_json FROM trials WHERE config_id = ? LIMIT 1", (config_id,)
+        ).fetchone()
+        if row is None:
+            raise FlakyAnythingError(
+                f"no config {config_id!r} in the store", hint="run `flaky-anything hunt` first"
+            )
+        return TrialConfig.model_validate_json(row[0])
+
+    def failing_config_ids(self, nodeid: str) -> list[str]:
+        """Config ids of trials in which `nodeid` failed, oldest first, without repeats."""
+        rows = self.conn.execute(
+            "SELECT t.config_id FROM outcomes o JOIN trials t ON t.trial_id = o.trial_id "
+            "WHERE o.nodeid = ? AND o.outcome IN ('failed', 'timeout', 'error') "  # hunt.FAILING
+            "ORDER BY t.rowid",
+            (nodeid,),
+        ).fetchall()
+        return list(dict.fromkeys(r[0] for r in rows))
+
     def signature_of(self, trial_id: str, nodeid: str) -> Signature | None:
         row = self.conn.execute(
             "SELECT s.id, s.exc_type, s.normalized_frames, s.sample_longrepr FROM outcomes o "
