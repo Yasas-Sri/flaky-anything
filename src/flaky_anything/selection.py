@@ -82,3 +82,41 @@ def junit_history(xml_files: Iterable[Path], collected: Sequence[str]) -> dict[s
             counts.setdefault(nodeid, [0, 0])[failed] += 1
     history = {n: History(passed, failed) for n, (passed, failed) in counts.items()}
     return dict(sorted(history.items(), key=lambda kv: (not kv[1].mixed, -kv[1].failed)))
+
+
+ROOT_MARKERS = ("pyproject.toml", "pytest.ini", "tox.ini", "setup.cfg")
+
+
+def find_root(paths: Sequence[str], cwd: Path | None = None) -> tuple[Path, list[str]]:
+    """Project root for `paths` (dirs, files or node ids) and the paths relative to it.
+
+    Root = nearest directory at or above the first path holding a config file (like pytest's
+    rootdir), else `cwd`. `hunt tests/corpus/project` thus runs that project's own testpaths.
+    """
+    cwd = (cwd or Path.cwd()).resolve()
+    resolved = [(cwd / p.split("::", 1)[0]).resolve() for p in paths]
+    start = resolved[0] if resolved else cwd
+    if not start.is_dir():
+        start = start.parent
+    candidates = (start, *start.parents)
+    root = next((d for d in candidates if any((d / m).is_file() for m in ROOT_MARKERS)), cwd)
+    rel: list[str] = []
+    for raw, path in zip(paths, resolved, strict=True):
+        if not path.is_relative_to(root):
+            raise FlakyAnythingError(
+                f"{raw} is outside the project root {root}",
+                hint="hunt one project at a time (paths must share a pyproject.toml/pytest.ini)",
+            )
+        suffix = raw.split("::", 1)[1] if "::" in raw else None
+        relpath = path.relative_to(root).as_posix()
+        if relpath != ".":
+            rel.append(f"{relpath}::{suffix}" if suffix else relpath)
+    return root, rel
+
+
+def default_python(root: Path) -> str:
+    """The project's own venv interpreter if it has one (tests need its dependencies)."""
+    for venv in (root / ".venv" / "bin" / "python", root / ".venv" / "Scripts" / "python.exe"):
+        if venv.is_file():
+            return str(venv)
+    return sys.executable

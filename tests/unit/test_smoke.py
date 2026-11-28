@@ -11,7 +11,7 @@ def test_version_command_prints_package_version() -> None:
     assert result.output.strip() == __version__
 
 
-@pytest.mark.parametrize("cmd", ["hunt", "diagnose", "repro", "fix", "verify", "report"])
+@pytest.mark.parametrize("cmd", ["diagnose", "repro", "fix", "verify", "report"])
 def test_stub_commands_exit_2(cmd: str) -> None:
     result = CliRunner().invoke(app, [cmd])
     assert result.exit_code == 2
