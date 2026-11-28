@@ -12,6 +12,7 @@ from typing import TypeVar
 
 from flaky_anything.runner import TrialResult
 from flaky_anything.store import Signature
+from flaky_anything.trial_plugin import redact_env
 
 SAMPLE_CHARS = 4000
 _LOCATION = re.compile(r"^(?P<path>\S.*?):(?P<line>\d+):(?: (?P<rest>.*))?$")
@@ -36,6 +37,7 @@ def _norm_path(path: str) -> str:
 
 
 def _norm_text(text: str) -> str:
+    text = redact_env(text)  # already done in the plugin; also for longreprs from elsewhere
     text = _TMP.sub("<TMP>", text)
     text = _ADDR.sub("0xADDR", text)
     text = _NUM.sub("N", text)
@@ -48,7 +50,7 @@ def _make(exc_type: str, frames: list[str], message: list[str], sample: str) -> 
         id=hashlib.sha256(key.encode()).hexdigest()[:16],
         exc_type=exc_type,
         normalized_frames="\n".join(frames),
-        sample_longrepr=sample[:SAMPLE_CHARS],
+        sample_longrepr=redact_env(sample)[:SAMPLE_CHARS],
     )
 
 

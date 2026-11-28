@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 import random
+import re
 import sys
 from collections.abc import Generator
 from pathlib import Path
@@ -64,6 +65,15 @@ def _emit(event: dict[str, object]) -> None:
     if path:
         with open(path, "a") as f:
             f.write(json.dumps(event) + "\n")
+
+
+# pytest's assertion rewriting prints `os.environ` in full: the user's whole environment (secrets
+# included) plus per-trial paths that would make every failure a new signature (D31).
+_ENV_REPR = re.compile(r"environ\(\{.*?(?:\}\)|$)", re.MULTILINE)
+
+
+def redact_env(text: str) -> str:
+    return _ENV_REPR.sub("environ({...})", text)
 
 
 def per_test_seed(random_seed: int, nodeid: str) -> int:
@@ -130,7 +140,7 @@ class _Trial:
         )
         r.duration += report.duration
         if report.failed and r.outcome != "failed":
-            r.outcome, r.phase, r.longrepr = "failed", report.when, report.longreprtext
+            r.outcome, r.phase, r.longrepr = "failed", report.when, redact_env(report.longreprtext)
         elif report.skipped and r.outcome == "passed":
             r.outcome, r.phase = "skipped", report.when
 

@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from flaky_anything.config import TrialConfig
 from flaky_anything.runner import TrialResult
 from flaky_anything.signatures import group, signature, signatures_for
-from flaky_anything.trial_plugin import NodeResult
+from flaky_anything.trial_plugin import NodeResult, redact_env
 
 # Real --tb=long output captured from the corpus (Python 3.14).
 T1 = """def test_next_month_invoice():
@@ -106,3 +106,23 @@ def test_signatures_for_trial_covers_failures_timeouts_and_crashes() -> None:
 def test_group_by_signature_keeps_order() -> None:
     a, b = signature(O1), signature(T1)
     assert group([("t1", a), ("t2", b), ("t3", a)]) == {a.id: ["t1", "t3"], b.id: ["t2"]}
+
+
+def test_environ_reprs_are_redacted_and_do_not_split_signatures() -> None:
+    def failure(env: str) -> str:
+        return (
+            "    def test_x():\n"
+            '>       assert os.environ.get("MODE") == "fast"\n'
+            "E       AssertionError: assert None == 'fast'\n"
+            "E        +  where None = get('MODE')\n"
+            f"E        +    where get = environ({{{env}}}).get\n"
+            "\n"
+            "tests/test_x.py:4: AssertionError"
+        )
+
+    a = signature(failure("'TOKEN': 's3cr3t', 'FLAKY_ANYTHING_RESULT': '/r/aaaa.jsonl'"))
+    b = signature(failure("'TZ': 'Asia/Colombo', 'FLAKY_ANYTHING_RESULT': '/r/bbbb.jso..."))
+    assert a.id == b.id
+    assert "s3cr3t" not in a.sample_longrepr  # the stored sample is redacted too
+    assert redact_env("x = environ({'TOKEN': 's3cr3t'}).get('A')") == "x = environ({...}).get('A')"
+    assert redact_env("where environ({'TOKEN': 's3cr3t', 'B': 'tru...") == "where environ({...})"

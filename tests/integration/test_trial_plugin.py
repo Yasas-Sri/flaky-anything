@@ -160,3 +160,16 @@ def test_missing_trial_env_is_refused(project: Path) -> None:
     proc, _, _ = run(project, TrialConfig(nodeids=[ONE]), {"FLAKY_ANYTHING_TRIAL": ""})
     assert proc.returncode == 4
     assert "FLAKY_ANYTHING_TRIAL" in proc.stderr
+
+
+def test_recorded_failures_never_contain_the_environment(project: Path) -> None:
+    (project / "test_env.py").write_text(
+        "import os\ndef test_mode(): assert os.environ.get('MODE') == 'fast'\n"
+    )
+    cfg = TrialConfig(nodeids=["test_env.py::test_mode"])
+    _, out, _ = run(project, cfg, env_override={"SECRET_TOKEN": "s3cr3t-value-42"})
+    assert out is not None
+    (res,) = out.results
+    assert res.outcome == "failed"
+    assert "environ({...})" in (res.longrepr or "")
+    assert "s3cr3t-value-42" not in (res.longrepr or "")
