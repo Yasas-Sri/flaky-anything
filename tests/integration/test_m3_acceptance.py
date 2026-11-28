@@ -7,7 +7,6 @@ under its trigger (must fail), as real trials of a copy of the corpus.
 import random
 import shutil
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +16,7 @@ from flaky_anything.config import ClockSpec, TrialConfig
 from flaky_anything.knobs.base import Knob
 from flaky_anything.knobs.clock import ClockKnob, edges
 from flaky_anything.knobs.order import explicit
+from flaky_anything.knobs.registry import baseline_config
 from flaky_anything.knobs.seeds import HashSeedKnob, RandomSeedKnob
 from flaky_anything.knobs.tz import ZONES, TzKnob
 from flaky_anything.runner import run_trial
@@ -28,12 +28,6 @@ else:
 
 CORPUS = Path(__file__).parents[1] / "corpus"
 GT: dict[str, Any] = tomllib.loads((CORPUS / "ground_truth.toml").read_text())["cases"]
-BASELINE = dict(
-    hash_seed=0,
-    random_seed=0,
-    tz="UTC",
-    clock=ClockSpec(instant=datetime(2027, 6, 16, 10, tzinfo=timezone.utc)),
-)
 ORDER_CASES = [k for k, v in GT.items() if v["necessary_knobs"] == ["order"]]
 SEED_KNOBS: dict[str, Knob[int]] = {k.name: k for k in (HashSeedKnob(), RandomSeedKnob())}
 SEED_CASES = [k for k, v in GT.items() if v["necessary_knobs"] in ([n] for n in SEED_KNOBS)]
@@ -58,7 +52,7 @@ def outcome(cfg: TrialConfig, project: Path, nodeid: str) -> str:
 def test_order_trigger_fails_via_knob(case: str, project: Path) -> None:
     victim = GT[case]["nodeid"]
     helper = GT[case].get("polluter") or GT[case]["state_setter"]
-    base = TrialConfig(nodeids=[victim], **BASELINE)
+    base = baseline_config([victim])
     # Baseline: the helper runs first for a brittle test, after the victim for a polluted one.
     passing = [helper, victim] if "state_setter" in GT[case] else [victim, helper]
     assert outcome(explicit(base, passing), project, victim) == "passed"
@@ -71,7 +65,7 @@ def test_seed_trigger_fails_via_knob(case: str, project: Path) -> None:
     # "some value the knob samples". Deterministic: each outcome is fixed by its seed value.
     victim = GT[case]["nodeid"]
     knob = SEED_KNOBS[GT[case]["necessary_knobs"][0]]
-    base = TrialConfig(nodeids=[victim], **BASELINE)
+    base = baseline_config([victim])
     assert outcome(base, project, victim) == "passed"
     for i in range(20):
         value = knob.sample(random.Random(i))
@@ -85,7 +79,7 @@ def test_clock_trigger_fails_via_knob(case: str, project: Path) -> None:
     victim, trigger = GT[case]["nodeid"], GT[case]["trigger"]["clock"]
     assert trigger in [t for group in edges("UTC").values() for t in group]  # the knob samples it
     knob = ClockKnob()
-    base = TrialConfig(nodeids=[victim], **BASELINE)
+    base = baseline_config([victim])
     assert outcome(knob.apply(base, knob.baseline()), project, victim) == "passed"
     assert outcome(knob.apply(base, ClockSpec(instant=trigger)), project, victim) == "failed"
 
@@ -95,7 +89,7 @@ def test_tz_trigger_fails_via_knobs_and_needs_each_one(case: str, project: Path)
     gt = GT[case]
     victim, tz = gt["nodeid"], gt["trigger"]["tz"]
     assert tz in ZONES
-    base = TrialConfig(nodeids=[victim], **BASELINE)
+    base = baseline_config([victim])
     tz_knob, clock_knob = TzKnob(), ClockKnob(ZONES)
     knobs: dict[str, Any] = {"tz": (tz_knob, tz)}
     if "clock" in gt["necessary_knobs"]:
